@@ -1,42 +1,41 @@
 "use server"
 
-import { anthropic } from "@ai-sdk/anthropic"
-import { generateText } from "ai"
-
 export async function reviewPdf(formData: FormData) {
   try {
     const pdfFile = formData.get("pdf") as File
-
+    
     if (!pdfFile) {
       throw new Error("No PDF file provided")
     }
 
-    // Convert the file to a buffer
-    const bytes = await pdfFile.arrayBuffer()
-    const buffer = Buffer.from(bytes)
-
-    // Generate the review using Claude (which has PDF understanding capabilities)
-    const { text } = await generateText({
-      model: anthropic("claude-3-5-sonnet"),
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Please review this PDF document and provide a comprehensive analysis. Include the following in your review:\n\n1. A summary of the main content and purpose\n2. Key points or arguments presented\n3. Structure and organization assessment\n4. Writing style and clarity evaluation\n5. Strengths of the document\n6. Areas for improvement\n\nKeep your review professional, constructive, and detailed.",
-            },
-            {
-              type: "image",
-              image: buffer,
-              media_type: "application/pdf",
-            },
-          ],
-        },
-      ],
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
+    
+    const response = await fetch(`${apiUrl}/api/upload`, {
+      method: 'POST',
+      body: formData,
     })
 
-    return text
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to process PDF')
+    }
+
+    const data = await response.json()
+    
+    // Format the questions into a readable text
+    const questionsText = data.questions.map((q: any, index: number) => {
+      return `
+Question ${index + 1}: ${q.question}
+
+Options:
+${q.options.join('\n')}
+
+Correct Answer: ${q.answer}
+-------------------`
+    }).join('\n\n')
+
+    return questionsText
+
   } catch (error) {
     console.error("Error processing PDF:", error)
     throw new Error("Failed to process the PDF")
