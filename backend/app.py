@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pdfplumber
-import openai
+from openai import OpenAI
 import os
 from dotenv import load_dotenv
 
@@ -10,13 +10,14 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5000"], 
+        "origins": ["http://localhost:3000"],
         "methods": ["POST"],
         "allow_headers": ["Content-Type"]
     }
 })
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @app.route('/api/upload', methods=['POST'])
 def upload_pdf():
@@ -56,19 +57,19 @@ Format:
 """
 
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
 
-        output = response['choices'][0]['message']['content']
+        output = response.choices[0].message.content
         questions = eval(output)  # use json.loads() if it's a valid JSON string
 
         return jsonify({'questions': questions})
 
     except Exception as e:
-        print(e)
+        print(f"Error: {str(e)}")  # Better error logging
         return jsonify({'error': 'Failed to generate questions'}), 500
 
 
