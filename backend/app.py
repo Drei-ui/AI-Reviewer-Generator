@@ -39,8 +39,8 @@ def upload_pdf():
 
     # AI Prompt
     prompt = f"""
-You are an expert educator. Based on the following content, generate 5 multiple-choice questions.
-Each question should have 4 options labeled a–d, and indicate the correct answer clearly.
+You are an expert educator. Based on the following content, generate multiple-choice questions.
+Each question should have 4 options labeled and, and indicate the correct answer clearly.
 
 Content:
 {text[:3000]}  # truncate if too long
@@ -58,7 +58,7 @@ Format:
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
