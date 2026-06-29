@@ -148,14 +148,15 @@ def process_pdf(job_id, pdf_bytes):
         return
 
     prompt = f"""You are an expert educator. Based on the following content, generate a comprehensive set of multiple-choice questions (aim for 15-30) that cover the key concepts from across the entire document.
-Each question should have 4 options labeled a) through d), and indicate the correct answer clearly.
+Each question must have 4 options, each labeled a) through d) (e.g. "a) ...").
+The "answer" field must be the full text of the correct option exactly as it appears in the options list, including its letter label (e.g. "b) ...") — not just the letter.
 
 Content:
 {text}"""
 
     try:
         response = client.messages.create(
-            model="claude-opus-4-8",
+            model="claude-haiku-4-5",
             max_tokens=8192,
             messages=[{"role": "user", "content": prompt}],
             output_config={
