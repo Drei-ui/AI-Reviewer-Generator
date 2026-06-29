@@ -1,0 +1,17 @@
+# Render Blueprint — deploys the Flask backend.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: ai-reviewer-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      # Set these in the Render dashboard (Environment tab) — not committed here.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Your deployed frontend origin, e.g. https://your-app.vercel.app
+      - key: FRONTEND_ORIGIN
+        sync: false

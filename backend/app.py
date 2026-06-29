@@ -9,9 +9,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+
+# Allowed frontend origins (comma-separated). Defaults to local dev;
+# set FRONTEND_ORIGIN to your deployed frontend URL in production.
+frontend_origins = [
+    o.strip()
+    for o in os.getenv("FRONTEND_ORIGIN", "http://localhost:3000").split(",")
+    if o.strip()
+]
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:3000"],
+        "origins": frontend_origins,
         "methods": ["POST"],
         "allow_headers": ["Content-Type"]
     }
