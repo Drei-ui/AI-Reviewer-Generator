@@ -1,9 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import pdfplumber
+import fitz  # PyMuPDF
 from anthropic import Anthropic
 import os
-import io
 import json
 import time
 import uuid
@@ -67,16 +66,20 @@ def _purge_old_jobs():
 def process_pdf(job_id, pdf_bytes):
     """Extract text from every page and ask Claude to generate questions."""
     try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            parts = []
-            total = 0
-            for page in pdf.pages:
-                page_text = page.extract_text() or ''
-                parts.append(page_text)
-                total += len(page_text)
-                if total >= MAX_CHARS:
-                    break
-            text = "\n".join(parts)[:MAX_CHARS]
+        # PyMuPDF extracts text quickly with a small, bounded memory footprint
+        # (pdfplumber peaks ~400MB+ on large image-heavy PDFs and OOMs a small
+        # instance; PyMuPDF stays well under that).
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        parts = []
+        total = 0
+        for page in doc:
+            page_text = page.get_text() or ''
+            parts.append(page_text)
+            total += len(page_text)
+            if total >= MAX_CHARS:
+                break
+        doc.close()
+        text = "".join(parts)[:MAX_CHARS]
     except Exception as e:
         print(f"Job {job_id} extraction error: {str(e)}")
         _set_job(job_id, status="error", error="Could not read the PDF")
