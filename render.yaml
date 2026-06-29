@@ -7,7 +7,9 @@ services:
     rootDir: backend
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
+    # Single worker so the in-memory job store is shared; threads let it serve
+    # status polls while a background thread processes the PDF.
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120
     envVars:
       # Set these in the Render dashboard (Environment tab) — not committed here.
       - key: ANTHROPIC_API_KEY
