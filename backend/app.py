@@ -6,7 +6,9 @@ import os
 import json
 import time
 import uuid
+import sqlite3
 import threading
+from contextlib import closing
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -39,28 +41,84 @@ MAX_FILE_MB = 10
 # (~1,000 chars/page, so this covers ~400 pages).
 MAX_CHARS = 400_000
 
-# In-memory job store. Processing happens in a background thread so the upload
-# request can return immediately — large PDFs take longer than a synchronous
-# request (and the platform's request timeouts) would allow.
-# NOTE: requires a single worker process (see render.yaml startCommand).
-jobs = {}
-jobs_lock = threading.Lock()
+# SQLite-backed job store. Processing happens in a background thread so the
+# upload request can return immediately — large PDFs take longer than a
+# synchronous request (and the platform's request timeouts) would allow.
+# Persisting to SQLite (instead of an in-memory dict) means a job survives a
+# worker restart or crash within the running container.
+# NOTE: on hosts with an ephemeral filesystem (e.g. Render free tier) the DB
+# file is cleared on full redeploys/spin-downs; point JOBS_DB_PATH at a
+# persistent disk, or use an external store, for durability across those.
 JOB_TTL_SECONDS = 60 * 60  # forget finished jobs after an hour
+DB_PATH = os.getenv("JOBS_DB_PATH", os.path.join(os.path.dirname(__file__), "jobs.db"))
+db_lock = threading.Lock()
 
 
-def _set_job(job_id, **fields):
-    with jobs_lock:
-        job = jobs.get(job_id, {})
-        job.update(fields)
-        jobs[job_id] = job
+def _connect():
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def _init_db():
+    with db_lock, closing(_connect()) as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                questions TEXT,
+                error TEXT,
+                created REAL NOT NULL
+            )"""
+        )
+        conn.commit()
+
+
+_init_db()
+
+
+def _set_job(job_id, status, questions=None, error=None, created=None):
+    with db_lock, closing(_connect()) as conn:
+        if created is None:
+            row = conn.execute("SELECT created FROM jobs WHERE id=?", (job_id,)).fetchone()
+            created = row[0] if row else time.time()
+        conn.execute(
+            """INSERT INTO jobs (id, status, questions, error, created)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 status=excluded.status,
+                 questions=excluded.questions,
+                 error=excluded.error""",
+            (
+                job_id,
+                status,
+                json.dumps(questions) if questions is not None else None,
+                error,
+                created,
+            ),
+        )
+        conn.commit()
+
+
+def _get_job(job_id):
+    with db_lock, closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT status, questions, error FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "status": row[0],
+        "questions": json.loads(row[1]) if row[1] else [],
+        "error": row[2],
+    }
 
 
 def _purge_old_jobs():
     cutoff = time.time() - JOB_TTL_SECONDS
-    with jobs_lock:
-        stale = [jid for jid, j in jobs.items() if j.get("created", 0) < cutoff]
-        for jid in stale:
-            del jobs[jid]
+    with db_lock, closing(_connect()) as conn:
+        conn.execute("DELETE FROM jobs WHERE created < ?", (cutoff,))
+        conn.commit()
 
 
 def process_pdf(job_id, pdf_bytes):
@@ -166,8 +224,7 @@ def upload_pdf():
 
 @app.route('/api/jobs/<job_id>', methods=['GET'])
 def job_status(job_id):
-    with jobs_lock:
-        job = jobs.get(job_id)
+    job = _get_job(job_id)
     if job is None:
         return jsonify({'error': 'Job not found'}), 404
 
