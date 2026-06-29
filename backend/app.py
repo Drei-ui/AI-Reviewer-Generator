@@ -223,6 +223,13 @@ def upload_pdf():
     return jsonify({'jobId': job_id}), 202
 
 
+@app.route('/api/health', methods=['GET'])
+def health():
+    # Lightweight endpoint the frontend pings on load to wake the (free-tier,
+    # sleep-after-idle) instance before the user uploads.
+    return jsonify({'status': 'ok'})
+
+
 @app.route('/api/jobs/<job_id>', methods=['GET'])
 def job_status(job_id):
     job = _get_job(job_id)
