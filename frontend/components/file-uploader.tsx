@@ -2,24 +2,32 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Upload, AlertCircle } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { LoadingAnimation } from "@/components/loading-animation"
 import { ReviewResult } from "@/components/review-result"
-import { startReview, getReviewStatus } from "@/app/actions"
+import { startReview, getReviewStatus, warmBackend } from "@/app/actions"
 
 // Poll up to ~5 minutes (120 polls x 2.5s) before giving up.
 const POLL_INTERVAL_MS = 2500
 const MAX_POLLS = 120
+// Keep in sync with the backend's MAX_FILE_MB.
+const MAX_FILE_BYTES = 10 * 1024 * 1024
 
 export function FileUploader() {
   const [file, setFile] = useState<File | null>(null)
   const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [review, setReview] = useState<string | null>(null)
+
+  // Wake the (sleep-after-idle) backend as soon as the page loads, so the
+  // first upload doesn't pay the full cold-start penalty.
+  useEffect(() => {
+    warmBackend().catch(() => {})
+  }, [])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
@@ -31,6 +39,11 @@ export function FileUploader() {
 
     if (selectedFile.type !== "application/pdf") {
       setError("Please upload a PDF file")
+      return
+    }
+
+    if (selectedFile.size > MAX_FILE_BYTES) {
+      setError("PDF is too large (max 10MB). Please choose a smaller file.")
       return
     }
 
@@ -58,7 +71,14 @@ export function FileUploader() {
       for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
 
-        const result = await getReviewStatus(jobId)
+        let result
+        try {
+          result = await getReviewStatus(jobId)
+        } catch {
+          // Transient status-check failure (network blip / brief restart) —
+          // keep polling rather than failing the whole job.
+          continue
+        }
 
         if (result.status === "done") {
           setReview(result.review)
@@ -76,7 +96,8 @@ export function FileUploader() {
       setError("This is taking longer than expected. Please try again.")
       setIsUploading(false)
     } catch (err) {
-      setError("Failed to process the PDF. Please try again.")
+      // startReview throws with the backend's specific message when available.
+      setError(err instanceof Error ? err.message : "Failed to process the PDF. Please try again.")
       console.error(err)
       setIsUploading(false)
     }
