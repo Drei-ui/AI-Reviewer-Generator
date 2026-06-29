@@ -9,7 +9,11 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { LoadingAnimation } from "@/components/loading-animation"
 import { ReviewResult } from "@/components/review-result"
-import { reviewPdf } from "@/app/actions"
+import { startReview, getReviewStatus } from "@/app/actions"
+
+// Poll up to ~5 minutes (120 polls x 2.5s) before giving up.
+const POLL_INTERVAL_MS = 2500
+const MAX_POLLS = 120
 
 export function FileUploader() {
   const [file, setFile] = useState<File | null>(null)
@@ -48,12 +52,32 @@ export function FileUploader() {
       const formData = new FormData()
       formData.append("pdf", file)
 
-      const reviewText = await reviewPdf(formData)
-      setReview(reviewText)
+      const jobId = await startReview(formData)
+
+      // Poll the backend until the job finishes or errors.
+      for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+
+        const result = await getReviewStatus(jobId)
+
+        if (result.status === "done") {
+          setReview(result.review)
+          setIsUploading(false)
+          return
+        }
+
+        if (result.status === "error") {
+          setError(result.error || "Failed to process the PDF. Please try again.")
+          setIsUploading(false)
+          return
+        }
+      }
+
+      setError("This is taking longer than expected. Please try again.")
+      setIsUploading(false)
     } catch (err) {
       setError("Failed to process the PDF. Please try again.")
       console.error(err)
-    } finally {
       setIsUploading(false)
     }
   }
