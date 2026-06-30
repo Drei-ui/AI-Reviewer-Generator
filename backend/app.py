@@ -201,14 +201,19 @@ Content:
 
 @app.route('/api/upload', methods=['POST'])
 def upload_pdf():
-    if 'pdf' not in request.files:
+    # Accept either a multipart upload ("pdf" field, e.g. curl -F) or a raw
+    # request body (Content-Type: application/pdf). The frontend uses the raw
+    # body because forwarding a rebuilt multipart FormData from a Next.js
+    # server action can hang in that runtime.
+    file = request.files.get('pdf')
+    if file is not None:
+        pdf_bytes = file.read()
+    else:
+        pdf_bytes = request.get_data()
+
+    if not pdf_bytes:
         return jsonify({'error': 'No file part'}), 400
 
-    file = request.files['pdf']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-
-    pdf_bytes = file.read()
     if len(pdf_bytes) > MAX_FILE_MB * 1024 * 1024:
         return jsonify({'error': f'PDF too large (max {MAX_FILE_MB}MB)'}), 413
 

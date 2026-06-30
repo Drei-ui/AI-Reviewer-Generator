@@ -19,22 +19,27 @@ export async function warmBackend(): Promise<void> {
   }
 }
 
-// POST with a few retries. A cold or redeploying backend can briefly refuse
-// connections (surfacing as a thrown `TypeError: fetch failed`); retrying lets
-// it recover instead of failing the upload with an opaque 500.
+// POST with a few retries and a hard per-attempt timeout. A cold or
+// redeploying backend can briefly refuse or stall connections; the timeout
+// guarantees we fail fast (and retry) instead of hanging near the platform's
+// function time limit.
 async function postWithRetry(
   url: string,
   makeInit: () => RequestInit,
-  retries = 3,
+  retries = 2,
+  perAttemptTimeoutMs = 20000,
 ): Promise<Response> {
   let lastErr: unknown
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await fetch(url, makeInit())
+      return await fetch(url, {
+        ...makeInit(),
+        signal: AbortSignal.timeout(perAttemptTimeoutMs),
+      })
     } catch (err) {
       lastErr = err
       if (attempt < retries) {
-        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)))
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
       }
     }
   }
@@ -51,18 +56,16 @@ export async function startReview(formData: FormData): Promise<string> {
     throw new Error("No PDF file provided")
   }
 
-  // Read the bytes once so the request body can be rebuilt for each retry
-  // (a FormData/Blob body is single-use once sent).
+  // Send the PDF as a RAW request body, not multipart. Forwarding a rebuilt
+  // FormData/Blob from a server action can hang in the Next.js runtime; a plain
+  // byte body is sent cleanly with a content-length. The backend accepts both.
   const buf = Buffer.from(await pdfFile.arrayBuffer())
-  const makeInit = (): RequestInit => {
-    const fd = new FormData()
-    fd.append(
-      "pdf",
-      new Blob([buf], { type: pdfFile.type || "application/pdf" }),
-      pdfFile.name || "upload.pdf",
-    )
-    return { method: "POST", body: fd, cache: "no-store" }
-  }
+  const makeInit = (): RequestInit => ({
+    method: "POST",
+    headers: { "Content-Type": "application/pdf" },
+    body: buf,
+    cache: "no-store",
+  })
 
   const response = await postWithRetry(`${getApiUrl()}/api/upload`, makeInit)
 
