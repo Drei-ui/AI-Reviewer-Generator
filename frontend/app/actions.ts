@@ -1,7 +1,9 @@
 "use server"
 
 function getApiUrl() {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL
+  // .trim() also strips a stray leading BOM (U+FEFF counts as JS whitespace),
+  // which otherwise makes the URL unparseable ("TypeError: Failed to parse URL").
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL?.trim()
   if (!apiUrl) {
     throw new Error("API URL not configured")
   }
@@ -31,21 +33,22 @@ async function postWithRetry(
 ): Promise<Response> {
   let lastErr: unknown
   for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), perAttemptTimeoutMs)
     try {
-      return await fetch(url, {
-        ...makeInit(),
-        signal: AbortSignal.timeout(perAttemptTimeoutMs),
-      })
+      return await fetch(url, { ...makeInit(), signal: controller.signal })
     } catch (err) {
       lastErr = err
       if (attempt < retries) {
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
       }
+    } finally {
+      clearTimeout(timer)
     }
   }
   console.error("postWithRetry exhausted:", lastErr)
   throw new Error(
-    "Couldn't reach the server — it may be starting up. Please try again in a moment.",
+    `Couldn't reach the server (${String(lastErr)}). It may be starting up — please try again.`,
   )
 }
 
@@ -79,13 +82,19 @@ export async function startReview(formData: FormData): Promise<string> {
   return data.jobId as string
 }
 
+export type Question = {
+  question: string
+  options: string[]
+  answer: string
+}
+
 export type ReviewStatus =
   | { status: "processing" }
-  | { status: "done"; review: string }
+  | { status: "done"; questions: Question[] }
   | { status: "error"; error: string }
 
-// Poll the backend for a job's status. When done, format the questions into
-// the readable text the result view expects.
+// Poll the backend for a job's status, returning the structured questions when
+// done so the UI can render an interactive quiz.
 export async function getReviewStatus(jobId: string): Promise<ReviewStatus> {
   const response = await fetch(`${getApiUrl()}/api/jobs/${jobId}`, {
     cache: "no-store",
@@ -111,20 +120,7 @@ export async function getReviewStatus(jobId: string): Promise<ReviewStatus> {
   }
 
   if (data.status === "done") {
-    const questionsText = data.questions
-      .map((q: any, index: number) => {
-        return `
-Question ${index + 1}: ${q.question}
-
-Options:
-${q.options.join("\n")}
-
-Correct Answer: ${q.answer}
--------------------`
-      })
-      .join("\n\n")
-
-    return { status: "done", review: questionsText }
+    return { status: "done", questions: (data.questions ?? []) as Question[] }
   }
 
   return { status: "processing" }
