@@ -1,21 +1,70 @@
 "use client"
 
-import { FileText, RotateCcw, Download } from "lucide-react"
+import { useMemo, useState } from "react"
+import { RotateCcw, Download, Check, X, Eye, Trophy, ListChecks } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import type { Question } from "@/app/actions"
 
 interface ReviewResultProps {
-  review: string
+  questions: Question[]
   onReset: () => void
 }
 
-export function ReviewResult({ review, onReset }: ReviewResultProps) {
+const LETTERS = ["A", "B", "C", "D", "E", "F"]
+
+function normalize(s: string) {
+  return s.trim().toLowerCase()
+}
+function stripLetter(s: string) {
+  return s.replace(/^\s*[a-f][)\.\:]\s*/i, "").trim()
+}
+function letterOf(s: string) {
+  const m = s.trim().match(/^([a-f])[)\.\:]?/i)
+  return m ? m[1].toLowerCase() : null
+}
+// Robustly decide if an option matches the stored answer, which may be the full
+// option text ("b) ..."), just a letter ("b"), or the text without a label.
+function isCorrectOption(option: string, answer: string) {
+  if (normalize(option) === normalize(answer)) return true
+  const lo = letterOf(option)
+  const la = letterOf(answer)
+  if (lo && la && lo === la && answer.trim().length <= 3) return true
+  const ot = stripLetter(option)
+  return ot.length > 0 && normalize(ot) === normalize(stripLetter(answer))
+}
+
+export function ReviewResult({ questions, onReset }: ReviewResultProps) {
+  const [picked, setPicked] = useState<Record<number, number>>({})
+  const [revealed, setRevealed] = useState(false)
+
+  const answeredCount = Object.keys(picked).length
+  const correctCount = useMemo(
+    () =>
+      questions.reduce((n, q, qi) => {
+        const pi = picked[qi]
+        if (pi === undefined) return n
+        return isCorrectOption(q.options[pi] ?? "", q.answer) ? n + 1 : n
+      }, 0),
+    [picked, questions],
+  )
+  const progress = questions.length ? (answeredCount / questions.length) * 100 : 0
+
+  const handlePick = (qi: number, oi: number) => {
+    setPicked((prev) => (prev[qi] !== undefined ? prev : { ...prev, [qi]: oi }))
+  }
+
   const handleDownload = () => {
-    const blob = new Blob([review], { type: "text/plain" })
+    const text = questions
+      .map(
+        (q, i) =>
+          `Question ${i + 1}: ${q.question}\n\nOptions:\n${q.options.join("\n")}\n\nCorrect Answer: ${q.answer}\n-------------------`,
+      )
+      .join("\n\n")
+    const blob = new Blob([text], { type: "text/plain" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = "pdf-review.txt"
+    a.download = "review-questions.txt"
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -23,46 +72,124 @@ export function ReviewResult({ review, onReset }: ReviewResultProps) {
   }
 
   return (
-    <Card className="w-full shadow-lg border border-primary/30 bg-gradient-to-b from-black/80 to-[#001800]/80 backdrop-blur-sm relative z-10 matrix-glow">
-      <CardHeader className="bg-gradient-to-r from-primary/10 to-secondary/10 rounded-t-lg border-b border-primary/20">
-        <CardTitle className="flex items-center gap-2 text-foreground matrix-text-glow">
-          <div className="bg-gradient-to-r from-primary/20 to-secondary/20 p-1.5 rounded-full">
-            <FileText className="h-5 w-5 text-primary" />
-          </div>
-          Document Review
-        </CardTitle>
-        <CardDescription>AI-generated review of your document</CardDescription>
-      </CardHeader>
-      <CardContent className="p-6">
-        <div className="prose prose-sm max-w-none prose-invert">
-          {review.split("\n").map((paragraph, index) =>
-            paragraph.trim() ? (
-              <p key={index} className={index === 0 ? "text-lg font-medium text-primary matrix-text-glow" : ""}>
-                {paragraph}
+    <div className="w-full space-y-5 relative z-10">
+      {/* Summary bar */}
+      <div className="rounded-2xl border border-primary/30 bg-gradient-to-br from-black/80 to-[#001a08]/80 backdrop-blur-md p-5 matrix-glow">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-primary to-secondary text-black shadow-lg">
+              <ListChecks className="h-6 w-6" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-foreground leading-tight">Your Quiz</h2>
+              <p className="text-xs text-muted-foreground">
+                {questions.length} questions · tap an option to check yourself
               </p>
-            ) : (
-              <br key={index} />
-            ),
-          )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 rounded-xl border border-primary/30 bg-black/40 px-4 py-2">
+            <Trophy className="h-4 w-4 text-primary" />
+            <span className="text-sm font-semibold tabular-nums text-foreground">
+              {correctCount}
+              <span className="text-muted-foreground"> / {answeredCount || 0} correct</span>
+            </span>
+          </div>
         </div>
-      </CardContent>
-      <CardFooter className="flex justify-between p-6 bg-gradient-to-r from-primary/5 to-secondary/5 rounded-b-lg border-t border-primary/20">
+        <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-primary/10">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-primary to-secondary transition-all duration-500"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <p className="mt-2 text-right text-[11px] text-muted-foreground tabular-nums">
+          {answeredCount}/{questions.length} answered
+        </p>
+      </div>
+
+      {/* Questions */}
+      <div className="space-y-4">
+        {questions.map((q, qi) => {
+          const pickedIdx = picked[qi]
+          const isAnswered = pickedIdx !== undefined
+          return (
+            <div
+              key={qi}
+              className="group rounded-2xl border border-primary/20 bg-gradient-to-b from-black/70 to-[#00140a]/70 backdrop-blur-md p-5 transition-colors hover:border-primary/40"
+            >
+              <div className="flex gap-3">
+                <span className="mt-0.5 grid h-7 min-w-7 shrink-0 place-items-center rounded-lg bg-primary/15 px-1.5 text-sm font-bold text-primary">
+                  {qi + 1}
+                </span>
+                <h3 className="text-base font-semibold leading-snug text-foreground">
+                  {stripLetter(q.question) || q.question}
+                </h3>
+              </div>
+
+              <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
+                {q.options.map((opt, oi) => {
+                  const correct = isCorrectOption(opt, q.answer)
+                  const show = isAnswered || revealed
+                  const chosen = pickedIdx === oi
+                  let cls =
+                    "border-primary/20 bg-black/30 hover:border-primary/50 hover:bg-primary/5"
+                  if (show && correct) cls = "border-primary bg-primary/15 text-foreground"
+                  else if (show && chosen && !correct) cls = "border-destructive bg-destructive/15"
+                  else if (show) cls = "border-primary/10 bg-black/20 opacity-70"
+                  return (
+                    <button
+                      key={oi}
+                      type="button"
+                      disabled={isAnswered}
+                      onClick={() => handlePick(qi, oi)}
+                      className={`flex items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm transition-all ${cls} ${
+                        isAnswered ? "cursor-default" : "cursor-pointer"
+                      }`}
+                    >
+                      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md border border-primary/30 text-xs font-bold text-primary">
+                        {LETTERS[oi]}
+                      </span>
+                      <span className="flex-1 text-foreground/90">{stripLetter(opt)}</span>
+                      {show && correct && <Check className="h-4 w-4 shrink-0 text-primary" />}
+                      {show && chosen && !correct && (
+                        <X className="h-4 w-4 shrink-0 text-destructive" />
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Footer actions */}
+      <div className="sticky bottom-3 z-10 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-primary/30 bg-black/70 backdrop-blur-md p-3 matrix-glow">
         <Button
           onClick={onReset}
           variant="outline"
-          className="gap-2 border-primary/30 hover:bg-primary/10 text-foreground"
+          className="gap-2 border-primary/30 bg-transparent text-foreground hover:bg-primary/10"
         >
           <RotateCcw className="h-4 w-4 text-primary" />
-          Review another document
+          New document
         </Button>
-        <Button
-          onClick={handleDownload}
-          className="gap-2 bg-gradient-to-r from-primary to-secondary hover:from-primary/90 hover:to-secondary/90 text-black font-medium matrix-glow"
-        >
-          <Download className="h-4 w-4" />
-          Download Review
-        </Button>
-      </CardFooter>
-    </Card>
+        <div className="flex gap-2">
+          <Button
+            onClick={() => setRevealed((v) => !v)}
+            variant="outline"
+            className="gap-2 border-primary/30 bg-transparent text-foreground hover:bg-primary/10"
+          >
+            <Eye className="h-4 w-4 text-primary" />
+            {revealed ? "Hide answers" : "Reveal answers"}
+          </Button>
+          <Button
+            onClick={handleDownload}
+            className="gap-2 bg-gradient-to-r from-primary to-secondary text-black font-semibold hover:opacity-90 matrix-glow"
+          >
+            <Download className="h-4 w-4" />
+            Download
+          </Button>
+        </div>
+      </div>
+    </div>
   )
 }
